@@ -1,0 +1,265 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/* =========================
+   ENUMS
+   ========================= */
+
+enum Role {
+  admin
+  customer
+}
+
+enum LeaseStatus {
+  active
+  paused
+  completed
+  cancelled
+}
+
+enum PaymentStatus {
+  scheduled
+  paid
+  failed
+  overdue
+  waived
+}
+
+enum MessageDirection {
+  outbound
+  inbound
+}
+
+/* =========================
+   USERS & PROFILES
+   ========================= */
+
+model User {
+  id                  String   @id @default(cuid())
+  email               String   @unique
+  passwordHash        String
+  role                Role
+  mustResetPassword   Boolean  @default(false)
+  tempPasswordIssuedAt DateTime?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  customer            Customer?
+  adminProfile        AdminProfile?
+}
+
+model AdminProfile {
+  id        String @id @default(cuid())
+  userId    String @unique
+  user      User   @relation(fields: [userId], references: [id])
+  fullName  String?
+}
+
+/* =========================
+   CUSTOMERS
+   ========================= */
+
+model Customer {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id])
+
+  companyName   String?
+  fullName      String
+  dateOfBirth   DateTime
+
+  addressLine1  String
+  addressLine2  String?
+  suburb        String
+  state         String
+  postcode      String
+
+  phoneE164     String   @unique
+  email         String   @unique
+
+  driversLicenceNumber String
+  driversLicenceState  String
+  driversLicenceExpiry DateTime
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  leases        Lease[]
+  smsMessages   SmsMessage[]
+  events        CustomerEvent[]
+
+  @@index([fullName])
+}
+
+/* =========================
+   VEHICLES
+   ========================= */
+
+model Vehicle {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  title       String
+  category    String
+
+  regoNumber  String   @unique
+  state       String?
+  currentKms  Int      @default(0)
+
+  slug        String   @unique
+
+  /* RegCheck enrichment */
+  make        String?
+  model       String?
+  year        Int?
+  colour      String?
+  bodyType    String?
+  fuelType    String?
+  vin         String?
+
+  regcheckRaw Json?
+  regcheckVerifiedAt DateTime?
+
+  leases      Lease[]
+
+  @@index([category])
+  @@index([make, model])
+}
+
+/* =========================
+   LEASES
+   ========================= */
+
+model Lease {
+  id                    String      @id @default(cuid())
+  customerId            String
+  vehicleId             String
+  status                LeaseStatus @default(active)
+
+  planName              String
+  weeklyAmount          Int         // cents
+  kmsPerWeek            Int?
+  bondAmount            Int?        // cents
+
+  startDate             DateTime
+  endDate               DateTime?
+
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  stripePaymentMethodId String?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  customer              Customer @relation(fields: [customerId], references: [id])
+  vehicle               Vehicle  @relation(fields: [vehicleId], references: [id])
+  payments              PaymentSchedule[]
+  fees                  LateFee[]
+
+  @@index([customerId])
+  @@index([vehicleId])
+  @@index([status])
+}
+
+/* =========================
+   PAYMENTS
+   ========================= */
+
+model PaymentSchedule {
+  id                    String        @id @default(cuid())
+  leaseId               String
+  dueDate               DateTime
+  amount                Int           // cents
+  status                PaymentStatus @default(scheduled)
+
+  stripeInvoiceId       String?
+  stripePaymentIntentId String?
+
+  failedAt              DateTime?
+  paidAt                DateTime?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  lease                 Lease @relation(fields: [leaseId], references: [id])
+  attempts              PaymentAttempt[]
+
+  @@index([leaseId])
+  @@index([dueDate])
+  @@index([status])
+}
+
+model PaymentAttempt {
+  id          String   @id @default(cuid())
+  paymentId   String
+  attemptedAt DateTime @default(now())
+  outcome     String
+  provider    String
+  providerRef String?
+  raw         Json?
+
+  payment     PaymentSchedule @relation(fields: [paymentId], references: [id])
+
+  @@index([paymentId])
+}
+
+/* =========================
+   LATE FEES
+   ========================= */
+
+model LateFee {
+  id          String   @id @default(cuid())
+  leaseId     String
+  paymentId   String?
+  dateApplied DateTime
+  amount      Int      // cents
+  waived      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  lease       Lease @relation(fields: [leaseId], references: [id])
+
+  @@index([leaseId])
+}
+
+/* =========================
+   SMS / EVENTS
+   ========================= */
+
+model SmsMessage {
+  id          String           @id @default(cuid())
+  customerId  String
+  direction   MessageDirection
+  fromE164    String
+  toE164      String
+  body        String
+  mediaUrls   String?
+  provider    String
+  providerSid String?
+  sentAt      DateTime @default(now())
+
+  customer    Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([sentAt])
+}
+
+model CustomerEvent {
+  id         String   @id @default(cuid())
+  customerId String
+  type       String
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([type])
+}
